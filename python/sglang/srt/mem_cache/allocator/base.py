@@ -57,6 +57,10 @@ class BaseTokenToKVPoolAllocator(abc.ABC):
     def available_size(self):
         return (len(self.free_pages) + len(self.release_pages)) * self.page_size
 
+    def decode_available_size(self):
+        """Return the capacity that can be consumed by ``alloc_decode``."""
+        return self.available_size()
+
     def get_kvcache(self):
         return self._kvcache
 

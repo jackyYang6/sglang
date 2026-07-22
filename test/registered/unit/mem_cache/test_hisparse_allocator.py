@@ -6,14 +6,74 @@ import torch
 
 from sglang.srt.mem_cache.allocator.hisparse import (
     DeepSeekV4HiSparseTokenToKVPoolAllocator,
+    HiSparseTokenToKVPoolAllocator,
 )
+from sglang.srt.mem_cache.deepseek_v4_memory_pool import HiSparseC4DevicePool
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=1, suite="base-a-test-cpu")
 
 
+class _FixedCapacity:
+    def __init__(self, available: int, decode_available: int | None = None):
+        self.available = available
+        self.decode_available = decode_available
+
+    def available_size(self) -> int:
+        return self.available
+
+    def decode_available_size(self) -> int:
+        return (
+            self.available if self.decode_available is None else self.decode_available
+        )
+
+
 class TestDeepSeekV4HiSparseAllocator(CustomTestCase):
+    def test_decode_mem_check_uses_decode_specific_capacity(self):
+        from sglang.srt.managers.schedule_batch import ScheduleBatch
+
+        batch = ScheduleBatch.__new__(ScheduleBatch)
+        batch.new_tokens_required_next_decode = MagicMock(return_value=16_384)
+        batch.tree_cache = None
+        batch.token_to_kv_pool_allocator = _FixedCapacity(8_448, 16_384)
+
+        self.assertTrue(batch.check_decode_mem())
+
+    def test_dsv4_decode_capacity_ignores_fixed_c4_buffer_availability(self):
+        allocator = object.__new__(DeepSeekV4HiSparseTokenToKVPoolAllocator)
+        allocator.compress_ratio = 4
+        allocator.logical_attn_allocator = _FixedCapacity(16_384)
+        allocator.hisparse_attn_allocator = _FixedCapacity(2_112)
+
+        self.assertEqual(allocator.available_size(), 8_448)
+        self.assertEqual(allocator.decode_available_size(), 16_384)
+
+    def test_generic_hisparse_decode_capacity_keeps_device_limit(self):
+        allocator = object.__new__(HiSparseTokenToKVPoolAllocator)
+        allocator.logical_attn_allocator = _FixedCapacity(16_384)
+        allocator.hisparse_attn_allocator = _FixedCapacity(2_112)
+
+        self.assertEqual(allocator.decode_available_size(), 2_112)
+
+    def test_empty_pp_pool_exposes_coordinator_layout_metadata(self):
+        pool = HiSparseC4DevicePool(
+            size=4160,
+            page_size=64,
+            dtype=torch.float8_e4m3fn,
+            qk_nope_head_dim=448,
+            qk_rope_head_dim=64,
+            layer_num=0,
+            device="cpu",
+            enable_memory_saver=False,
+        )
+
+        self.assertEqual(pool.kv_buffer, [])
+        self.assertEqual(pool.kv_cache_total_dim, 584)
+        self.assertEqual(pool.bytes_per_page_padded, 37440)
+        self.assertEqual(pool.store_dtype, torch.uint8)
+        self.assertEqual(pool.data_ptrs.numel(), 0)
+
     def test_forwards_swa_tail_allocation_to_logical_allocator(self):
         allocator = object.__new__(DeepSeekV4HiSparseTokenToKVPoolAllocator)
         logical_allocator = MagicMock(spec=["alloc_extend_swa_tail"])

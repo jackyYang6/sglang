@@ -378,6 +378,10 @@ class DeepSeekV4HiSparseTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
             self.hisparse_attn_allocator.available_size() * self.compress_ratio,
         )
 
+    def decode_available_size(self) -> int:
+        """DSV4 decode reuses its admitted request's fixed C4 device buffer."""
+        return self.logical_attn_allocator.available_size()
+
     def alloc(self, need_size: int):
         raise NotImplementedError(
             "DeepSeek V4 HiSparse allocator does not support direct token allocation; "
